@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleHelp, MoreHorizontal, Network, Pencil, Plus, RefreshCw, Search, Shuffle, Trash2 } from "lucide-react";
+import { ChevronsUpDown, CircleAlert, CircleHelp, MoreHorizontal, Network, Pencil, Plus, RefreshCw, Search, Shuffle, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { VirtualTableBody } from "@/shared/components/virtual-table-body";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   createEgressSource,
@@ -30,6 +32,7 @@ import {
   type EgressFallbackMode,
   type EgressNodeDTO,
   type EgressOperationsConfigDTO,
+  type EgressFallbackScope,
   type EgressScope,
   type EgressSourceDTO,
   type EgressSourceInput,
@@ -40,7 +43,6 @@ import { ErrorState, LoadingState, TableLoadingRow } from "@/shared/components/d
 import { DataTableFilters } from "@/shared/components/data-table-filters";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { Pagination } from "@/shared/components/pagination";
-import { VirtualTableBody } from "@/shared/components/virtual-table-body";
 
 type SourceForm = Omit<EgressSourceInput, "url" | "proxyURL" | "clearProxyURL"> & { url: string; proxyEnabled: boolean; proxyURL: string };
 const emptySource: SourceForm = {
@@ -50,8 +52,9 @@ const emptySource: SourceForm = {
 // 15-second ceiling. Keeping a request to 32 nodes leaves enough headroom for
 // the admin HTTP timeout.
 const egressProbeBatchSize = 32;
-const fallbackScopes: EgressScope[] = ["grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset"];
-const fallbackDescriptionKeys: Record<EgressScope, string> = {
+const fallbackScopes: EgressFallbackScope[] = ["grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset"];
+const nodeScopes: EgressScope[] = ["grok_build", "grok_build_oauth", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset"];
+const fallbackDescriptionKeys: Record<EgressFallbackScope, string> = {
   grok_build: "settings.egress.fallbackBuildHelp",
   grok_web: "settings.egress.fallbackWebHelp",
   grok_console: "settings.egress.fallbackConsoleHelp",
@@ -59,7 +62,7 @@ const fallbackDescriptionKeys: Record<EgressScope, string> = {
   grok_console_asset: "settings.egress.fallbackConsoleAssetHelp",
 };
 
-function defaultFallbacks(): Record<EgressScope, EgressFallbackConfigDTO> {
+function defaultFallbacks(): Record<EgressFallbackScope, EgressFallbackConfigDTO> {
   return {
     grok_build: { mode: "none" }, grok_web: { mode: "none" },
     grok_console: { mode: "none" }, grok_web_asset: { mode: "none" }, grok_console_asset: { mode: "none" },
@@ -67,7 +70,7 @@ function defaultFallbacks(): Record<EgressScope, EgressFallbackConfigDTO> {
 }
 
 const defaultOperationsForm: Omit<EgressOperationsConfigDTO, "updatedAt"> = {
-  probeProvider: "cloudflare", probeIntervalSeconds: 900, autoAssignEnabled: false, autoBalanceEnabled: false, assignmentIntervalSeconds: 300, fallbacks: defaultFallbacks(),
+	probeProvider: "cloudflare", probeIntervalSeconds: 900, autoAssignEnabled: false, autoBalanceEnabled: false, assignmentIntervalSeconds: 300, fallbacks: defaultFallbacks(),
 };
 
 function operationsFormFrom(value?: EgressOperationsConfigDTO): Omit<EgressOperationsConfigDTO, "updatedAt"> {
@@ -145,11 +148,11 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
     onError: showError,
   });
 
-  function setFallback(scope: EgressScope, fallback: EgressFallbackConfigDTO) {
+  function setFallback(scope: EgressFallbackScope, fallback: EgressFallbackConfigDTO) {
     setOperationsDraft({ ...operationsForm, fallbacks: { ...operationsForm.fallbacks, [scope]: fallback } });
   }
 
-  function setFallbackMode(scope: EgressScope, mode: EgressFallbackMode) {
+  function setFallbackMode(scope: EgressFallbackScope, mode: EgressFallbackMode) {
     const candidates = fallbackNodeCandidates(nodesQuery.data?.items ?? [], scope);
     const current = operationsForm.fallbacks[scope];
     const currentCandidate = candidates.find((node) => node.id === current.nodeId);
@@ -219,15 +222,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
                             <SelectItem value="fixed" disabled={candidates.length === 0}>{t("settings.egress.fallbackFixed")}</SelectItem>
                           </SelectContent>
                         </Select>
-                        {fallback.mode === "fixed" ? (
-                          <Select value={selectedAvailable ? (fallback.nodeId ?? "unavailable") : "unavailable"} disabled={candidates.length === 0} onValueChange={(nodeId) => setFallback(scope, { mode: "fixed", nodeId })}>
-                            <SelectTrigger aria-label={t("settings.egress.fallbackNode", { scope: scopeLabel(scope) })}><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {!selectedAvailable ? <SelectItem value="unavailable" disabled>{t("settings.egress.fallbackNodeUnavailable")}</SelectItem> : null}
-                              {candidates.map((node) => <SelectItem key={node.id} value={node.id}>{node.name} ({scopeLabel(node.scope)})</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        ) : null}
+                        {fallback.mode === "fixed" ? <FallbackNodePicker scope={scope} candidates={candidates} selectedID={fallback.nodeId} selectedAvailable={selectedAvailable} disabled={candidates.length === 0} scopeLabel={scopeLabel} onChange={(nodeID) => setFallback(scope, { mode: "fixed", nodeId: nodeID })} /> : null}
                       </div>
                     </div>
                   );
@@ -322,6 +317,7 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
               <DataTableFilters filters={[{
                 id: "subscription-scope", label: t("settings.egress.scope"), value: scopeFilter, onChange: (value) => { setScopeFilter(value); setPage(1); }, options: [
                   { value: "grok_build", label: scopeLabel("grok_build") },
+                  { value: "grok_build_oauth", label: scopeLabel("grok_build_oauth") },
                   { value: "grok_web", label: scopeLabel("grok_web") },
                   { value: "grok_console", label: scopeLabel("grok_console") },
                   { value: "grok_web_asset", label: scopeLabel("grok_web_asset") },
@@ -381,7 +377,8 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
   );
 }
 
-function fallbackNodeCandidates(nodes: EgressNodeDTO[], scope: EgressScope): EgressNodeDTO[] {
+
+function fallbackNodeCandidates(nodes: EgressNodeDTO[], scope: EgressFallbackScope): EgressNodeDTO[] {
   return nodes.filter((node) => node.enabled && node.proxyConfigured && !node.proxyPool && !node.accountBoundProxy && !nodeCooling(node) && supportsFallbackScope(node.scope, scope));
 }
 
@@ -389,14 +386,48 @@ function nodeCooling(node: EgressNodeDTO): boolean {
   return node.cooldownUntil !== undefined && Date.parse(node.cooldownUntil) > Date.now();
 }
 
-function supportsFallbackScope(nodeScope: EgressScope, requestScope: EgressScope): boolean {
+function supportsFallbackScope(nodeScope: EgressScope, requestScope: EgressFallbackScope): boolean {
   if (nodeScope === requestScope) return true;
   if (requestScope === "grok_console" || requestScope === "grok_web_asset") return nodeScope === "grok_web";
   return requestScope === "grok_console_asset" && (nodeScope === "grok_console" || nodeScope === "grok_web");
 }
 
 function ScopeSelect({ value, onChange, scopeLabel }: { value: EgressScope; onChange: (value: EgressScope) => void; scopeLabel: (scope: EgressScope) => string }) {
-  return <Select value={value} onValueChange={(next) => onChange(next as EgressScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{fallbackScopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent></Select>;
+  return <Select value={value} onValueChange={(next) => onChange(next as EgressScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{nodeScopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent></Select>;
+}
+
+function FallbackNodePicker({ scope, candidates, selectedID, selectedAvailable, disabled, scopeLabel, onChange }: {
+  scope: EgressFallbackScope; candidates: EgressNodeDTO[]; selectedID?: string; selectedAvailable: boolean; disabled: boolean;
+  scopeLabel: (scope: EgressScope) => string; onChange: (nodeID: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selected = candidates.find((node) => node.id === selectedID);
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const matches = normalizedSearch
+    ? candidates.filter((node) => node.name.toLocaleLowerCase().includes(normalizedSearch) || node.id.toLocaleLowerCase().includes(normalizedSearch))
+    : candidates;
+  const visible = matches.slice(0, 100);
+  const label = selectedAvailable && selected ? `${selected.name} (${scopeLabel(selected.scope)})` : t("settings.egress.fallbackNodeUnavailable");
+
+  return (
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (next) setSearch(""); }}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" role="combobox" aria-expanded={open} aria-label={t("settings.egress.fallbackNode", { scope: scopeLabel(scope) })} disabled={disabled} className="min-w-0 justify-between font-normal">
+          <span className="truncate">{label}</span><ChevronsUpDown className="ml-2 size-4 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-2">
+        <div className="relative"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input type="search" autoComplete="off" className="h-8 pl-8 text-xs" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("settings.egress.searchFallbackNodes")} aria-label={t("settings.egress.searchFallbackNodes")} /></div>
+        <div className="mt-2 max-h-56 space-y-0.5 overflow-y-auto overscroll-contain" role="listbox" aria-label={t("settings.egress.fallbackNode", { scope: scopeLabel(scope) })}>
+          {visible.map((node) => <button key={node.id} type="button" role="option" aria-selected={selectedID === node.id} className="flex min-h-9 w-full items-center rounded-md px-2 text-left text-xs hover:bg-accent" onClick={() => { onChange(node.id); setOpen(false); }}><span className="truncate">{node.name} ({scopeLabel(node.scope)})</span></button>)}
+          {matches.length === 0 ? <p className="p-3 text-center text-xs text-muted-foreground">{t("settings.egress.noMatches")}</p> : null}
+          {matches.length > visible.length ? <p className="px-2 py-1 text-[10px] text-muted-foreground">{t("settings.egress.fallbackResultLimit", { count: visible.length, total: matches.length })}</p> : null}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function OperationSectionHeader({ title, help, children }: { title: string; help: string; children?: ReactNode }) {

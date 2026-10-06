@@ -45,7 +45,7 @@ func (s *Service) syncSource(ctx context.Context, operations OperationsRepositor
 		return ImportResult{}, ErrSubscriptionSync
 	}
 	userAgent := ""
-	if source.Scope != domain.ScopeBuild {
+	if source.Scope != domain.ScopeBuild && source.Scope != domain.ScopeBuildOAuth {
 		s.mu.RLock()
 		userAgent = s.browserUA
 		s.mu.RUnlock()

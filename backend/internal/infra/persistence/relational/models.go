@@ -495,7 +495,7 @@ func (runtimeSettingsModel) TableName() string { return "runtime_settings" }
 type egressSubscriptionSourceModel struct {
 	ID                     uint64 `gorm:"primaryKey;autoIncrement"`
 	Name                   string `gorm:"size:160;not null;uniqueIndex;check:chk_egress_subscription_sources_name,length(trim(name)) BETWEEN 1 AND 160"`
-	Scope                  string `gorm:"size:32;not null;check:chk_egress_subscription_sources_scope,scope IN ('grok_build','grok_web','grok_console','grok_web_asset','grok_console_asset')"`
+	Scope                  string `gorm:"size:32;not null;check:chk_egress_subscription_sources_scope,scope IN ('grok_build','grok_build_oauth','grok_web','grok_console','grok_web_asset','grok_console_asset')"`
 	Enabled                bool   `gorm:"not null;default:true"`
 	EncryptedURL           string `gorm:"type:text;not null;default:'';check:chk_egress_subscription_sources_url,length(encrypted_url) <= 65536"`
 	EncryptedProxyURL      string `gorm:"type:text;not null;default:'';check:chk_egress_subscription_sources_proxy_url,length(encrypted_proxy_url) <= 65536"`
@@ -524,7 +524,7 @@ func (egressProxyProfileModel) TableName() string { return "egress_proxy_profile
 type egressNodeModel struct {
 	ID                          uint64  `gorm:"primaryKey;autoIncrement"`
 	Name                        string  `gorm:"size:160;not null;check:chk_egress_nodes_name,length(trim(name)) BETWEEN 1 AND 160"`
-	Scope                       string  `gorm:"size:32;not null;check:chk_egress_nodes_specific_scope,scope IN ('grok_build','grok_web','grok_console','grok_web_asset','grok_console_asset')"`
+	Scope                       string  `gorm:"size:32;not null;check:chk_egress_nodes_specific_scope,scope IN ('grok_build','grok_build_oauth','grok_web','grok_console','grok_web_asset','grok_console_asset')"`
 	Enabled                     bool    `gorm:"not null;default:true"`
 	ProxyPool                   bool    `gorm:"not null;default:false"`
 	SourceID                    *uint64 `gorm:"uniqueIndex:uidx_egress_nodes_source_key,priority:1;index:idx_egress_nodes_source;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
@@ -564,6 +564,20 @@ type egressNodeModel struct {
 }
 
 func (egressNodeModel) TableName() string { return "egress_nodes" }
+
+// buildOAuthEgressAssignmentModel keeps only the selected existing egress node;
+// the proxy configuration remains canonical on egress_nodes.
+type buildOAuthEgressAssignmentModel struct {
+	AccountID       uint64           `gorm:"primaryKey"`
+	NodeID          uint64           `gorm:"not null;index"`
+	PoolFingerprint string           `gorm:"size:64;not null;default:''"`
+	CreatedAt       time.Time        `gorm:"not null"`
+	UpdatedAt       time.Time        `gorm:"not null"`
+	Account         *accountModel    `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	Node            *egressNodeModel `gorm:"foreignKey:NodeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+}
+
+func (buildOAuthEgressAssignmentModel) TableName() string { return "build_oauth_egress_assignments" }
 
 type egressOperationsConfigModel struct {
 	ID                                  uint64    `gorm:"primaryKey;check:chk_egress_operations_config_id,id = 1"`

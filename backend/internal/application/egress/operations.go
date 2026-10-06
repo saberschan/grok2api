@@ -410,6 +410,7 @@ func (s *Service) UpdateOperationsConfig(ctx context.Context, input OperationsCo
 			return domain.OperationsConfig{}, err
 		}
 	}
+
 	saved, err := operations.SaveEgressOperationsConfig(ctx, domain.OperationsConfig{
 		ProbeProvider: probeProvider, ProbeIntervalSeconds: input.ProbeIntervalSeconds, AutoAssignEnabled: input.AutoAssignEnabled,
 		AutoBalanceEnabled: input.AutoBalanceEnabled, AssignmentIntervalSeconds: input.AssignmentIntervalSeconds,
@@ -430,7 +431,7 @@ func (s *Service) validateFallbacks(ctx context.Context, current domain.Operatio
 		result[scope] = current.FallbackFor(scope)
 	}
 	for scope, fallback := range input {
-		if !validScope(scope) {
+		if !validFallbackScope(scope) {
 			return nil, fmt.Errorf("%w: 回退作用域无效", ErrInvalidInput)
 		}
 		mode := fallback.Mode.Normalized()
@@ -566,11 +567,20 @@ func publicSource(value domain.SubscriptionSource) domain.PublicSubscriptionSour
 }
 
 func validScope(scope domain.Scope) bool {
-	return scope == domain.ScopeBuild || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
+	return scope == domain.ScopeBuild || scope == domain.ScopeBuildOAuth || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
 }
 
 func allOperationScopes() []domain.Scope {
 	return []domain.Scope{domain.ScopeBuild, domain.ScopeWeb, domain.ScopeConsole, domain.ScopeWebAsset, domain.ScopeConsoleAsset}
+}
+
+func validFallbackScope(scope domain.Scope) bool {
+	for _, candidate := range allOperationScopes() {
+		if scope == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func validateImportInput(input ImportInput) error {

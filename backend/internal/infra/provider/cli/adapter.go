@@ -33,6 +33,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/pkg/reasoningreplay"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 type Config struct {
@@ -55,18 +56,20 @@ const (
 
 // Adapter implements the Grok Build CLI Responses, model, Billing, and OAuth protocols.
 type Adapter struct {
-	cfgMu          sync.RWMutex
-	cfg            Config
-	http           *http.Client
-	oauth          *oauthClient
-	cipher         *security.Cipher
-	base           *buildDirectTransport
-	agentID        string
-	modelsMu       sync.Mutex
-	modelsETags    map[uint64]string
-	fallbackMarker FallbackMarker
-	uploadIssuer   VideoUploadIssuer
-	replay         *reasoningreplay.ReasoningReplay
+	cfgMu           sync.RWMutex
+	cfg             Config
+	http            *http.Client
+	oauth           *oauthClient
+	cipher          *security.Cipher
+	egress          *infraegress.Manager
+	oauthEgressRepo repository.OAuthEgressRepository
+	base            *buildDirectTransport
+	agentID         string
+	modelsMu        sync.Mutex
+	modelsETags     map[uint64]string
+	fallbackMarker  FallbackMarker
+	uploadIssuer    VideoUploadIssuer
+	replay          *reasoningreplay.ReasoningReplay
 	// conversationReasoningCache bridges Chat/Messages tool calls to the
 	// upstream Responses reasoning proof. It is deliberately separate from
 	// the persistent native Responses replay, and its keys never contain an
@@ -102,7 +105,15 @@ func (a *Adapter) SetLogger(logger *slog.Logger) {
 
 func (a *Adapter) SetEgress(manager *infraegress.Manager) {
 	if manager != nil {
-		a.http.Transport = &egressTransport{manager: manager, fallback: a.base}
+		a.egress = manager
+		a.http.Transport = &egressTransport{manager: manager, fallback: a.base, oauthEgressRepository: a.oauthEgressRepo}
+	}
+}
+
+func (a *Adapter) SetOAuthEgressRepository(repo repository.OAuthEgressRepository) {
+	a.oauthEgressRepo = repo
+	if a.egress != nil {
+		a.http.Transport = &egressTransport{manager: a.egress, fallback: a.base, oauthEgressRepository: repo}
 	}
 }
 
@@ -1037,7 +1048,7 @@ func (a *Adapter) RefreshCredential(ctx context.Context, credential account.Cred
 	if strings.TrimSpace(refreshToken) == "" {
 		return provider.RefreshedCredential{}, &provider.CredentialRefreshError{Code: "missing_refresh_token", Message: "Refresh token is missing", Permanent: true}
 	}
-	refreshCtx := infraegress.WithCredential(ctx, credential)
+	refreshCtx := infraegress.WithOAuthAccount(infraegress.WithCredential(ctx, credential), credential.ID)
 	tokens, err := a.oauth.refreshWithClientID(refreshCtx, refreshToken, credential.OIDCClientID)
 	if err != nil {
 		return provider.RefreshedCredential{}, err

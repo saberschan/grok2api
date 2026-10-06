@@ -402,7 +402,7 @@ func (s *Service) DefaultUserAgents() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return map[string]string{
-		string(domain.ScopeBuild): "", string(domain.ScopeWeb): s.browserUA, string(domain.ScopeConsole): s.browserUA,
+		string(domain.ScopeBuild): "", string(domain.ScopeBuildOAuth): "", string(domain.ScopeWeb): s.browserUA, string(domain.ScopeConsole): s.browserUA,
 		string(domain.ScopeWebAsset): s.browserUA, string(domain.ScopeConsoleAsset): s.browserUA,
 	}
 }
@@ -457,7 +457,7 @@ func (s *Service) publicNodes(values []domain.Node) []domain.PublicNode {
 }
 
 func validListScope(scope domain.Scope) bool {
-	return scope == "" || scope == domain.ScopeBuild || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
+	return scope == "" || scope == domain.ScopeBuild || scope == domain.ScopeBuildOAuth || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
 }
 
 func allServiceScopes() []domain.Scope {
@@ -1161,7 +1161,7 @@ func (s *Service) applyInput(value domain.Node, input Input, create bool) (domai
 		return domain.Node{}, fmt.Errorf("%w: 名称必须在 1 到 160 个字符之间", ErrInvalidInput)
 	}
 	if !validListScope(input.Scope) || input.Scope == "" {
-		return domain.Node{}, fmt.Errorf("%w: scope 必须是 grok_build、grok_web、grok_console、grok_web_asset 或 grok_console_asset", ErrInvalidInput)
+		return domain.Node{}, fmt.Errorf("%w: scope 无效", ErrInvalidInput)
 	}
 	value.Name, value.Scope, value.Enabled, value.ProxyPool = name, input.Scope, input.Enabled, proxyPool
 	if input.AccountCapacity != nil {
@@ -1170,13 +1170,13 @@ func (s *Service) applyInput(value domain.Node, input Input, create bool) (domai
 		}
 		value.AccountCapacity = *input.AccountCapacity
 	}
-	if input.Scope == domain.ScopeBuild {
-		// Build 请求始终沿用 Provider 生成的 CLI User-Agent，出口节点不得覆盖协议身份。
+	if input.Scope == domain.ScopeBuild || input.Scope == domain.ScopeBuildOAuth {
+		// Build and its dedicated OAuth scope use Provider-owned identity.
 		value.UserAgent = ""
 	} else {
 		value.UserAgent = strings.TrimSpace(input.UserAgent)
 	}
-	if input.Scope != domain.ScopeBuild && value.UserAgent == "" {
+	if input.Scope != domain.ScopeBuild && input.Scope != domain.ScopeBuildOAuth && value.UserAgent == "" {
 		s.mu.RLock()
 		value.UserAgent = s.browserUA
 		s.mu.RUnlock()
@@ -1210,7 +1210,7 @@ func (s *Service) applyInput(value domain.Node, input Input, create bool) (domai
 	if value.ProxyPool && strings.TrimSpace(value.EncryptedProxyURL) == "" {
 		return domain.Node{}, fmt.Errorf("%w: 代理池模式需要配置代理地址", ErrInvalidInput)
 	}
-	if input.Scope == domain.ScopeBuild || input.Scope == domain.ScopeConsoleAsset {
+	if input.Scope == domain.ScopeBuild || input.Scope == domain.ScopeBuildOAuth || input.Scope == domain.ScopeConsoleAsset {
 		value.EncryptedCloudflareCookie = ""
 	} else if input.ClearCookies {
 		value.EncryptedCloudflareCookie = ""
@@ -1251,7 +1251,7 @@ func (s *Service) applyInput(value domain.Node, input Input, create bool) (domai
 
 func (s *Service) publicNode(value domain.Node) domain.PublicNode {
 	userAgent := value.UserAgent
-	if value.Scope == domain.ScopeBuild {
+	if value.Scope == domain.ScopeBuild || value.Scope == domain.ScopeBuildOAuth {
 		userAgent = ""
 	}
 	proxyDisplay, proxyFingerprint, accountBoundProxy := s.proxyMetadata(value.EncryptedProxyURL)

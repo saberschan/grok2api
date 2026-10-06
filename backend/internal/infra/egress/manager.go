@@ -458,6 +458,19 @@ func (m *Manager) AcquireBuildEnvironmentDirectIfIsolated(ctx context.Context, a
 
 // AcquireCredential binds the outbound proxy identity to one persisted
 // Provider credential. Resin templates use this identity as their Account.
+func (m *Manager) AcquireOAuthNode(ctx context.Context, accountID, nodeID uint64) (*Lease, error) {
+	identity := "build_oauth_" + strconv.FormatUint(accountID, 10)
+	node, err := m.repository.GetEgressNode(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if !node.Enabled || strings.TrimSpace(node.EncryptedProxyURL) == "" || node.Scope != domain.ScopeBuildOAuth {
+		return nil, repository.ErrNotFound
+	}
+	lease, _, err := m.leaseForNode(ctx, domain.ScopeBuild, identity, "", false, node)
+	return lease, err
+}
+
 func (m *Manager) AcquireCredential(ctx context.Context, scope domain.Scope, credential accountdomain.Credential) (*Lease, error) {
 	identity := strings.TrimSpace(credential.EgressIdentity)
 	if identity == "" {

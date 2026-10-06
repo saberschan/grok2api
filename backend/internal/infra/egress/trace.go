@@ -29,6 +29,7 @@ type Trace struct {
 type traceContextKey struct{}
 type accountContextKey struct{}
 type egressNodeContextKey struct{}
+type oauthAccountContextKey struct{}
 type qualityProbeContextKey struct{}
 
 // WithAccount passes a stable Provider account identity to the egress layer. It is used only to render
@@ -56,6 +57,21 @@ func WithCredential(ctx context.Context, credential accountdomain.Credential) co
 
 // WithEgressNode attaches the explicitly assigned node ID for transports that
 // only receive a request context (notably Grok Build's RoundTripper).
+func WithOAuthAccount(ctx context.Context, accountID uint64) context.Context {
+	if ctx == nil || accountID == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, oauthAccountContextKey{}, accountID)
+}
+
+func OAuthAccountFromContext(ctx context.Context) uint64 {
+	if ctx == nil {
+		return 0
+	}
+	value, _ := ctx.Value(oauthAccountContextKey{}).(uint64)
+	return value
+}
+
 func WithEgressNode(ctx context.Context, nodeID uint64) context.Context {
 	if ctx == nil || nodeID == 0 {
 		return ctx

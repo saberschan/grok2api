@@ -2153,6 +2153,9 @@ Object.assign(resources.en.translation.settings.egress as unknown as Record<stri
   addManually: "Form entry",
   probe: "Connectivity probe", probeHelp: "The latest independent IPv4 and IPv6 checks through the provider recorded with each result. This only confirms access to the IP echo endpoint; it does not guarantee Grok upstream availability or represent real request health.", probeLatency: "Probe latency: {{latency}} ms", probeProvider: "IP echo service", probeProviderHelp: "Choose the fixed service used for IPv4 and IPv6 connectivity checks. Cloudflare is the default and IPinfo remains selectable.", healthy: "Healthy", unhealthy: "Unhealthy", notTested: "Not tested", test: "Test proxy", testedOne: "Proxy test completed",
   operations: "Proxy operations", automation: "Automation", automationHelp: "Enabled proxy nodes are checked automatically. Account assignment and balancing run on schedule only when their switches are enabled.",
+  scopeBuildOAuth: "Grok Build OAuth (token refresh)",
+  searchFallbackNodes: "Search nodes by name or ID",
+  fallbackResultLimit: "Showing the first {{count}} of {{total}} matches. Refine your search to see others.",
   subscriptions: "Proxy subscriptions", subscriptionsHelp: "Save and periodically sync proxy subscriptions into egress nodes.",
   testAll: "Check all", testAllHelp: "Check every enabled proxy node now and update its connectivity probe result.",
   rebalance: "Balance accounts", rebalanceHelp: "Assign unbound accounts and balance automatic bindings once. Manual bindings are not changed.",
@@ -2200,6 +2203,9 @@ Object.assign(resources.en.translation.settings.egress as unknown as Record<stri
 
 Object.assign(resources["zh-CN"].translation.settings.egress as unknown as Record<string, string>, {
   automationHelp: "已启用的代理节点会自动定时检测；账号分配与均衡仅在开启对应开关后按间隔执行。",
+  scopeBuildOAuth: "Grok Build OAuth（Token 刷新）",
+  searchFallbackNodes: "按名称或 ID 搜索节点",
+  fallbackResultLimit: "匹配 {{total}} 个，显示前 {{count}} 个；请继续搜索缩小范围。",
   subscriptions: "代理订阅",
   subscriptionsHelp: "保存并定时同步代理订阅，生成或更新出口代理节点。",
   accounts: "已绑定",

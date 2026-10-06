@@ -43,6 +43,7 @@ var schemaModels = []any{
 	&accountModelSyncStateModel{},
 	&accountModelQuotaBlockModel{},
 	&accountEgressLeaseBlockModel{},
+	&buildOAuthEgressAssignmentModel{},
 	&clientKeyModel{},
 	&clientKeyModelPermission{},
 	&billingReservationModel{},
@@ -177,6 +178,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.ensureConsoleConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移 Console 数据库约束: %w", err)
+	}
+	if err := d.ensureOAuthEgressScopeConstraints(ctx); err != nil {
+		return fmt.Errorf("迁移 Grok Build OAuth 节点作用域约束: %w", err)
 	}
 	if err := d.ensureEgressAssetScopeConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移资源出口数据库约束: %w", err)
@@ -501,6 +505,31 @@ type consoleConstraint struct {
 	model any
 	table string
 	name  string
+}
+
+func (d *Database) ensureOAuthEgressScopeConstraints(ctx context.Context) error {
+	if err := d.dropObsoleteEgressNodeScopeConstraint(ctx); err != nil {
+		return fmt.Errorf("删除遗留出口节点作用域约束: %w", err)
+	}
+	return d.ensureNamedConstraints(ctx, []consoleConstraint{
+		{model: &egressNodeModel{}, table: "egress_nodes", name: "chk_egress_nodes_specific_scope"},
+		{model: &egressSubscriptionSourceModel{}, table: "egress_subscription_sources", name: "chk_egress_subscription_sources_scope"},
+	}, "grok_build_oauth")
+}
+
+func (d *Database) dropObsoleteEgressNodeScopeConstraint(ctx context.Context) error {
+	constraint := consoleConstraint{model: &egressNodeModel{}, table: "egress_nodes", name: "chk_egress_nodes_scope"}
+	definition, err := d.constraintDefinition(ctx, constraint)
+	if err != nil || definition == "" {
+		return err
+	}
+	drop := func() error {
+		return d.db.WithContext(ctx).Migrator().DropConstraint(constraint.model, constraint.name)
+	}
+	if d.dialect == "sqlite" {
+		return d.withSQLiteForeignKeysDisabled(ctx, drop)
+	}
+	return drop()
 }
 
 func (d *Database) ensureConsoleConstraints(ctx context.Context) error {
