@@ -16,6 +16,7 @@ type Scope string
 
 const (
 	ScopeBuild        Scope = "grok_build"
+	ScopeBuildOAuth   Scope = "grok_build_oauth"
 	ScopeWeb          Scope = "grok_web"
 	ScopeConsole      Scope = "grok_console"
 	ScopeWebAsset     Scope = "grok_web_asset"

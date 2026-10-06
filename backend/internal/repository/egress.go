@@ -14,6 +14,11 @@ type EgressRepository interface {
 	DeleteEgressNode(ctx context.Context, id uint64) error
 }
 
+// OAuthEgressRepository binds one account to an existing OAuth-scope egress node.
+type OAuthEgressRepository interface {
+	SelectOAuthEgressNode(ctx context.Context, accountID uint64) (uint64, error)
+}
+
 // EgressNodePageRepository is the bounded management-list contract. Runtime
 // routing repositories only need EgressRepository's full-list operations.
 type EgressNodePageRepository interface {

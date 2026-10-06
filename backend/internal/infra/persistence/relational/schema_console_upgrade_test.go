@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 )
 
@@ -26,6 +27,15 @@ func TestInitializeSchemaUpgradesProviderChecksForConsole(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := database.db.WithContext(ctx).AutoMigrate(schemaModels...); err != nil {
+		t.Fatal(err)
+	}
+	egressNodes := NewEgressRepository(database)
+	createdAt := time.Now().UTC()
+	legacyNode, err := egressNodes.CreateEgressNode(ctx, egressdomain.Node{
+		Name: "existing-build-egress", Scope: egressdomain.ScopeBuild, Enabled: true, Health: 1,
+		ProbeStatus: egressdomain.ProbeStatusUnknown, CreatedAt: createdAt, UpdatedAt: createdAt,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	accountRepository := NewAccountRepository(database)
@@ -64,9 +74,21 @@ func TestInitializeSchemaUpgradesProviderChecksForConsole(t *testing.T) {
 		if (table == "request_audits" || table == "egress_nodes" || table == "egress_subscription_sources") && !strings.Contains(sql, "grok_console_asset") {
 			t.Fatalf("table %s was not upgraded for Console assets: %s", table, sql)
 		}
+		if table == "egress_nodes" && strings.Contains(sql, "chk_egress_nodes_scope") {
+			t.Fatalf("obsolete egress node scope constraint remains: %s", sql)
+		}
 		if table == "request_audits" && !strings.Contains(sql, "compaction") {
 			t.Fatalf("table %s operation constraint was not upgraded: %s", table, sql)
 		}
+	}
+	preservedNode, err := egressNodes.GetEgressNode(ctx, legacyNode.ID)
+	if err != nil || preservedNode.Scope != egressdomain.ScopeBuild {
+		t.Fatalf("legacy Build node was not preserved: %#v, err=%v", preservedNode, err)
+	}
+	preservedNode.Scope = egressdomain.ScopeBuildOAuth
+	preservedNode.EncryptedProxyURL = "test-encrypted-proxy"
+	if _, err := egressNodes.UpdateEgressNode(ctx, preservedNode); err != nil {
+		t.Fatalf("update existing node to OAuth scope: %v", err)
 	}
 	assertSQLiteUniqueIndexes(t, database, "provider_accounts", "idx_provider_accounts_identity_key")
 	assertSQLiteUniqueIndexes(t, database, "model_routes", "uidx_model_routes_managed_public_capability")
@@ -295,7 +317,7 @@ func (legacyEgressSubscriptionSourceModel) TableName() string {
 
 type legacyEgressNodeModel struct {
 	ID    uint64 `gorm:"primaryKey"`
-	Scope string `gorm:"size:32;not null;check:chk_egress_nodes_specific_scope,scope IN ('all','grok_build','grok_web','grok_web_asset')"`
+	Scope string `gorm:"size:32;not null;check:chk_egress_nodes_scope,scope IN ('all','grok_build','grok_web','grok_web_asset')"`
 }
 
 func (legacyEgressNodeModel) TableName() string { return "egress_nodes" }
