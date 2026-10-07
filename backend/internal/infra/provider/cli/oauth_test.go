@@ -281,3 +281,19 @@ func TestOAuthScopeMatchesOfficialPersonalAccountContract(t *testing.T) {
 		}
 	}
 }
+func TestOAuthDeviceStartErrorIsSanitizedAndActionable(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return oauthResponse(http.StatusBadGateway, `{"error":"upstream_unavailable","error_description":"temporary upstream failure","access_token":"secret-do-not-leak"}`), nil
+	})}
+	client := newOAuthClient(httpClient, nil)
+	_, err := client.startDevice(context.Background())
+	if err == nil {
+		t.Fatal("startDevice() error = nil")
+	}
+	if !strings.Contains(err.Error(), "502") || !strings.Contains(err.Error(), "temporary upstream failure") {
+		t.Fatalf("startDevice() error lacks safe upstream detail: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret-do-not-leak") {
+		t.Fatalf("startDevice() error leaked sensitive response data: %v", err)
+	}
+}
