@@ -1065,13 +1065,13 @@ func (a *Adapter) RefreshCredential(ctx context.Context, credential account.Cred
 }
 
 func (a *Adapter) StartDeviceAuthorization(ctx context.Context) (provider.DeviceAuthorization, error) {
-	ctx, cancel := context.WithTimeout(ctx, buildControlTimeout)
+	ctx, cancel := context.WithTimeout(infraegress.WithOAuthDeviceFlow(ctx), buildControlTimeout)
 	defer cancel()
 	return a.oauth.startDevice(ctx)
 }
 
 func (a *Adapter) PollDeviceAuthorization(ctx context.Context, deviceCode string) (provider.CredentialSeed, error) {
-	ctx, cancel := context.WithTimeout(ctx, buildControlTimeout)
+	ctx, cancel := context.WithTimeout(infraegress.WithOAuthDeviceFlow(ctx), buildControlTimeout)
 	defer cancel()
 	tokens, err := a.oauth.pollDevice(ctx, deviceCode)
 	if err != nil {

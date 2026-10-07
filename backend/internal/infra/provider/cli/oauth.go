@@ -323,7 +323,11 @@ func (c *oauthClient) postForm(ctx context.Context, endpoint string, form url.Va
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("xAI OAuth 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		details := parseOAuthErrorResponse(body, resp.StatusCode)
+		if details.Message != "" {
+			return fmt.Errorf("xAI OAuth 返回 %d: %s", resp.StatusCode, details.Message)
+		}
+		return fmt.Errorf("xAI OAuth 返回 %d", resp.StatusCode)
 	}
 	return json.Unmarshal(body, output)
 }

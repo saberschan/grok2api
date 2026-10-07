@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -778,6 +779,7 @@ func (h *Handler) get(c *gin.Context) {
 func (h *Handler) startDevice(c *gin.Context) {
 	value, err := h.service.StartDeviceLogin(c.Request.Context())
 	if err != nil {
+		slog.Default().Warn("device_oauth_start_failed", "error", err)
 		response.Error(c, http.StatusBadGateway, "deviceLoginStartFailed", "启动 Device OAuth 失败")
 		return
 	}

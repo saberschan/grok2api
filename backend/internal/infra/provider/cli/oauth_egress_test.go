@@ -56,3 +56,33 @@ func TestOAuthRefreshContextPreservesPrimaryEgressIdentity(t *testing.T) {
 		t.Fatal("primary account affinity was lost from refresh context")
 	}
 }
+func TestDeviceOAuthAdapterMarksStartAndPollForOAuthEgress(t *testing.T) {
+	var paths []string
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if !infraegress.OAuthDeviceFlowFromContext(request.Context()) {
+			t.Fatalf("device OAuth request %s was not marked for the OAuth egress pool", request.URL.Path)
+		}
+		paths = append(paths, request.URL.Path)
+		switch request.URL.Path {
+		case "/oauth2/device/code":
+			return oauthResponse(http.StatusOK, `{"device_code":"device","user_code":"ABCD-EFGH","verification_uri":"https://auth.x.ai/activate","interval":1,"expires_in":1800}`), nil
+		case "/oauth2/token":
+			return oauthResponse(http.StatusOK, `{"access_token":"access","refresh_token":"refresh","expires_in":3600}`), nil
+		default:
+			t.Fatalf("unexpected OAuth path %q", request.URL.Path)
+			return nil, nil
+		}
+	})}
+	adapter := &Adapter{oauth: newOAuthClient(httpClient, nil)}
+	authorization, err := adapter.StartDeviceAuthorization(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := adapter.PollDeviceAuthorization(context.Background(), authorization.DeviceCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seed.AccessToken != "access" || len(paths) != 2 || paths[0] != "/oauth2/device/code" || paths[1] != "/oauth2/token" {
+		t.Fatalf("seed=%#v paths=%v", seed, paths)
+	}
+}

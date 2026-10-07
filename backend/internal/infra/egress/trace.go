@@ -30,6 +30,7 @@ type traceContextKey struct{}
 type accountContextKey struct{}
 type egressNodeContextKey struct{}
 type oauthAccountContextKey struct{}
+type oauthDeviceFlowContextKey struct{}
 type qualityProbeContextKey struct{}
 
 // WithAccount passes a stable Provider account identity to the egress layer. It is used only to render
@@ -69,6 +70,20 @@ func OAuthAccountFromContext(ctx context.Context) uint64 {
 		return 0
 	}
 	value, _ := ctx.Value(oauthAccountContextKey{}).(uint64)
+	return value
+}
+func WithOAuthDeviceFlow(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, oauthDeviceFlowContextKey{}, true)
+}
+
+func OAuthDeviceFlowFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(oauthDeviceFlowContextKey{}).(bool)
 	return value
 }
 

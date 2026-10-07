@@ -25,32 +25,40 @@ func (t *egressTransport) RoundTrip(request *http.Request) (*http.Response, erro
 		return nil, err
 	}
 	if !configured {
-		affinity := infraegress.AccountFromContext(request.Context())
-		if affinity == "" {
-			affinity = "bootstrap"
-		}
-		lease, configured, err = t.manager.AcquireIfConfigured(request.Context(), domainegress.ScopeBuild, affinity)
-		if err != nil {
-			return nil, err
+		if infraegress.OAuthDeviceFlowFromContext(request.Context()) {
+			lease, configured, err = t.manager.AcquireIfConfigured(request.Context(), domainegress.ScopeBuildOAuth, "device_oauth_bootstrap")
+			if err != nil {
+				return nil, err
+			}
 		}
 		if !configured {
-			// When account-isolated pools are enabled, still go through the manager's
-			// direct node so different accounts do not share the process-wide fallback
-			// HTTP transport / TCP connection pool. Preserve the fallback transport's
-			// HTTP_PROXY/HTTPS_PROXY behavior while partitioning the pool.
-			lease, configured, err = t.manager.AcquireBuildEnvironmentDirectIfIsolated(request.Context(), affinity)
+			affinity := infraegress.AccountFromContext(request.Context())
+			if affinity == "" {
+				affinity = "bootstrap"
+			}
+			lease, configured, err = t.manager.AcquireIfConfigured(request.Context(), domainegress.ScopeBuild, affinity)
 			if err != nil {
 				return nil, err
 			}
 			if !configured {
-				idleRequest := t.withStreamIdleContext(request)
-				response, requestErr := t.fallback.RoundTrip(idleRequest)
-				infraegress.RecordDirectPhysicalCall(request.Context(), response, requestErr)
-				if requestErr != nil || response == nil || response.Body == nil {
+				// When account-isolated pools are enabled, still go through the manager's
+				// direct node so different accounts do not share the process-wide fallback
+				// HTTP transport / TCP connection pool. Preserve the fallback transport's
+				// HTTP_PROXY/HTTPS_PROXY behavior while partitioning the pool.
+				lease, configured, err = t.manager.AcquireBuildEnvironmentDirectIfIsolated(request.Context(), affinity)
+				if err != nil {
+					return nil, err
+				}
+				if !configured {
+					idleRequest := t.withStreamIdleContext(request)
+					response, requestErr := t.fallback.RoundTrip(idleRequest)
+					infraegress.RecordDirectPhysicalCall(request.Context(), response, requestErr)
+					if requestErr != nil || response == nil || response.Body == nil {
+						return response, requestErr
+					}
+					response.Body = t.wrapStreamIdleBody(response.Body, idleRequest.Context())
 					return response, requestErr
 				}
-				response.Body = t.wrapStreamIdleBody(response.Body, idleRequest.Context())
-				return response, requestErr
 			}
 		}
 	}
@@ -59,14 +67,18 @@ func (t *egressTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	}
 	idleRequest := t.withStreamIdleContext(request)
 	response, err := lease.Do(idleRequest)
+	feedbackScope := lease.Scope
+	if feedbackScope == "" {
+		feedbackScope = domainegress.ScopeBuild
+	}
 	if err != nil {
 		if shouldReportEgressFailure(request.Context(), err) {
-			t.manager.FeedbackForScope(context.WithoutCancel(request.Context()), domainegress.ScopeBuild, lease.NodeID, 0, err)
+			t.manager.FeedbackForScope(context.WithoutCancel(request.Context()), feedbackScope, lease.NodeID, 0, err)
 		}
 		lease.Release()
 		return nil, err
 	}
-	t.manager.FeedbackForScope(context.WithoutCancel(request.Context()), domainegress.ScopeBuild, lease.NodeID, response.StatusCode, nil)
+	t.manager.FeedbackForScope(context.WithoutCancel(request.Context()), feedbackScope, lease.NodeID, response.StatusCode, nil)
 	if response.Body == nil {
 		lease.Release()
 		return response, nil
