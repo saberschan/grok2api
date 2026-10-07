@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -101,9 +104,9 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 		device.ExpiresIn = 1800
 	}
 
-	// verify/approve 已在 auth.x.ai 完成状态变更。重定向目标只是结果页，
-	// 因此不访问 accounts.x.ai，直接解析首个 3xx Location 的状态路径。
-	status, finalURL, _, err := f.doWithFollow(ctx, http.MethodPost, ssoVerifyURL, url.Values{"user_code": {device.UserCode}}, false)
+	// verify 跳转到 consent 页面。该页面现在会提供 approve 所需的一次性令牌。
+	// 保持不自动跟随重定向，避免把 auth 流程交给浏览器页面或意外跨域跳转。
+	status, finalURL, verifyBody, err := f.doWithFollow(ctx, http.MethodPost, ssoVerifyURL, url.Values{"user_code": {device.UserCode}}, false)
 	if err != nil {
 		return provider.CredentialSeed{}, err
 	}
@@ -119,8 +122,28 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 		}
 		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动验证 Device Flow 失败")
 	}
+
+	consentToken := extractConsentToken(verifyBody)
+	if consentToken == "" {
+		consentStatus, consentURL, consentBody, consentErr := f.do(ctx, http.MethodGet, finalURL, nil)
+		if consentErr != nil {
+			return provider.CredentialSeed{}, fmt.Errorf("读取 SSO Device Flow consent 页面失败: %w", consentErr)
+		}
+		if consentStatus == http.StatusUnauthorized || ssoDeviceRedirectState(consentURL) == "sign-in" {
+			return provider.CredentialSeed{}, provider.ErrUnauthorized
+		}
+		if consentStatus < 200 || consentStatus >= 300 {
+			return provider.CredentialSeed{}, fmt.Errorf("读取 SSO Device Flow consent 页面失败: %w", conversionHTTPError{status: consentStatus})
+		}
+		consentToken = extractConsentToken(consentBody)
+	}
+	if consentToken == "" {
+		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动批准 Device Flow 失败：未获取 consent_token")
+	}
+
 	status, finalURL, _, err = f.doWithFollow(ctx, http.MethodPost, ssoApproveURL, url.Values{
 		"user_code": {device.UserCode}, "action": {"allow"}, "principal_type": {"User"}, "principal_id": {""},
+		"consent_token": {consentToken},
 	}, false)
 	if err != nil {
 		return provider.CredentialSeed{}, err
@@ -275,7 +298,7 @@ func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string
 			return response.StatusCode, currentURL, data, fmt.Errorf("xAI OAuth 重定向到非受信域名")
 		}
 		if !follow {
-			return response.StatusCode, currentURL, nil, nil
+			return response.StatusCode, currentURL, data, nil
 		}
 		if response.StatusCode == http.StatusSeeOther || ((response.StatusCode == http.StatusMovedPermanently || response.StatusCode == http.StatusFound) && currentMethod != http.MethodGet && currentMethod != http.MethodHead) {
 			currentMethod = http.MethodGet
@@ -349,6 +372,108 @@ func normalizeSSOToken(value string) string {
 		value = strings.TrimSpace(token)
 	}
 	return strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(value)
+}
+
+func extractConsentToken(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	tokenizer := html.NewTokenizer(bytes.NewReader(body))
+	tokenizer.SetMaxBuf(maxAuthBody)
+	for {
+		switch tokenizer.Next() {
+		case html.ErrorToken:
+			return extractEmbeddedConsentToken(body)
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tagName, hasAttrs := tokenizer.TagName()
+			if !strings.EqualFold(string(tagName), "input") || !hasAttrs {
+				continue
+			}
+			name, value := "", ""
+			for {
+				key, attrValue, more := tokenizer.TagAttr()
+				switch strings.ToLower(string(key)) {
+				case "name":
+					name = strings.TrimSpace(string(attrValue))
+				case "value":
+					value = strings.TrimSpace(string(attrValue))
+				}
+				if !more {
+					break
+				}
+			}
+			if strings.EqualFold(name, "consent_token") && validConsentToken(value) {
+				return value
+			}
+		}
+	}
+}
+
+func extractEmbeddedConsentToken(body []byte) string {
+	bodyText := string(body)
+	for offset := 0; offset < len(bodyText); {
+		keyIndex := -1
+		keyLength := 0
+		for _, key := range []string{"consent_token", "consentToken"} {
+			if i := strings.Index(bodyText[offset:], key); i >= 0 && (keyIndex < 0 || offset+i < keyIndex) {
+				keyIndex, keyLength = offset+i, len(key)
+			}
+		}
+		if keyIndex < 0 {
+			return ""
+		}
+		afterKey := keyIndex + keyLength
+		if scanEnd := min(len(bodyText), afterKey+64); afterKey < scanEnd {
+			if delimiter := strings.IndexAny(bodyText[afterKey:scanEnd], ":="); delimiter >= 0 {
+				valueStart := afterKey + delimiter + 1
+				for valueStart < len(body) && isConsentTokenPrefix(body[valueStart]) {
+					valueStart++
+				}
+				valueEnd := valueStart
+				for valueEnd < len(body) && isConsentTokenChar(body[valueEnd]) {
+					valueEnd++
+				}
+				if candidate := string(body[valueStart:valueEnd]); validConsentToken(candidate) {
+					return candidate
+				}
+			}
+		}
+		offset = afterKey
+	}
+	return ""
+}
+
+func isConsentTokenPrefix(value byte) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n', '\\', '"', '\'', ':':
+		return true
+	default:
+		return false
+	}
+}
+
+func isConsentTokenChar(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' || value == '_' || value == '-' || value == '.'
+}
+
+func validConsentToken(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || !strings.HasPrefix(parts[0], "eyJ") {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for i := 0; i < len(part); i++ {
+			if !(part[i] >= 'a' && part[i] <= 'z' || part[i] >= 'A' && part[i] <= 'Z' ||
+				part[i] >= '0' && part[i] <= '9' || part[i] == '_' || part[i] == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func decodeBuildClaims(token string) map[string]any {

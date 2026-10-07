@@ -69,11 +69,14 @@ func TestSSOBuildFlowMapsDeadSSOToUnauthorized(t *testing.T) {
 	}
 }
 
-func TestSSOBuildFlowUsesAuthEndpointsOnly(t *testing.T) {
+func TestSSOBuildFlowUsesConsentPageTokenAndTrustedEndpoints(t *testing.T) {
+	consentToken := "eyJhbGciOiJFUzI1NiJ9.eyJkYyI6ImRjIn0.signature"
 	client := &scriptedSSOClient{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(
 			`{"device_code":"dc","user_code":"uc","interval":1,"expires_in":1800}`))},
 		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/consent"}}, Body: io.NopCloser(strings.NewReader(""))},
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(
+			`<form><input value='` + consentToken + `' data-test='consent' name='consent_token'></form>`))},
 		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/done"}}, Body: io.NopCloser(strings.NewReader(""))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(
 			`{"access_token":"access","refresh_token":"refresh","expires_in":3600}`))},
@@ -83,22 +86,60 @@ func TestSSOBuildFlowUsesAuthEndpointsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seed.AccessToken != "access" || seed.RefreshToken != "refresh" || len(client.requests) != 4 {
+	if seed.AccessToken != "access" || seed.RefreshToken != "refresh" || len(client.requests) != 5 {
 		t.Fatalf("seed=%#v requests=%d", seed, len(client.requests))
 	}
-	for _, request := range client.requests {
-		if request.URL.Hostname() != "auth.x.ai" {
-			t.Fatalf("device flow visited unexpected host %q", request.URL.Hostname())
+	want := []struct{ method, path, host string }{
+		{http.MethodPost, "/oauth2/device/code", "auth.x.ai"},
+		{http.MethodPost, "/oauth2/device/verify", "auth.x.ai"},
+		{http.MethodGet, "/oauth2/device/consent", "accounts.x.ai"},
+		{http.MethodPost, "/oauth2/device/approve", "auth.x.ai"},
+		{http.MethodPost, "/oauth2/token", "auth.x.ai"},
+	}
+	for i, request := range client.requests {
+		if request.Method != want[i].method || request.URL.Path != want[i].path || request.URL.Hostname() != want[i].host {
+			t.Fatalf("request %d = %s %s, want %s %s", i, request.Method, request.URL, want[i].method, want[i].path)
 		}
+	}
+	approveBody, err := io.ReadAll(client.requests[3].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approveForm, err := url.ParseQuery(string(approveBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := approveForm.Get("consent_token"); got != consentToken {
+		t.Fatalf("approve consent_token = %q, want submitted page token", got)
+	}
+}
+
+func TestExtractConsentTokenSupportsHTMLAndRSC(t *testing.T) {
+	const consentToken = "eyJhbGciOiJFUzI1NiJ9.eyJkYyI6ImRjIn0.signature"
+	tests := map[string][]byte{
+		"HTML attributes in any order": []byte(`<input value='` + consentToken + `' name='consent_token'>`),
+		"RSC escaped JSON":             []byte("self.__next_f.push([1, \"{\\\"consentToken\\\":\\\"" + consentToken + "\\\"}\"]);"),
+		"RSC snake_case JSON":          []byte(`{"consent_token":"` + consentToken + `"}`),
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := extractConsentToken(body); got != consentToken {
+				t.Fatalf("extractConsentToken() = %q, want consent token", got)
+			}
+		})
+	}
+	if got := extractConsentToken([]byte(`<input name="consent_token" value="not-a-jwt">`)); got != "" {
+		t.Fatalf("malformed consent token accepted: %q", got)
 	}
 }
 
 func TestSSOBuildFlowVerifyDoesNotFollowRedirect(t *testing.T) {
+	const consentToken = "eyJhbGciOiJFUzI1NiJ9.eyJkYyI6ImRjIn0.signature"
 	client := &scriptedSSOClient{responses: []*http.Response{
-		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/consent"}}, Body: io.NopCloser(strings.NewReader(""))},
+		{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": []string{"https://accounts.x.ai/oauth2/device/consent"}}, Body: io.NopCloser(strings.NewReader(`<input name="consent_token" value="` + consentToken + `">`))},
 	}}
 	flow := &ssoBuildFlow{client: client, userAgent: "lease-agent", cookies: map[string]string{"sso": "live"}}
-	status, finalURL, _, err := flow.doWithFollow(context.Background(), http.MethodPost, ssoVerifyURL, url.Values{"user_code": {"uc"}}, false)
+	status, finalURL, body, err := flow.doWithFollow(context.Background(), http.MethodPost, ssoVerifyURL, url.Values{"user_code": {"uc"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +148,9 @@ func TestSSOBuildFlowVerifyDoesNotFollowRedirect(t *testing.T) {
 	}
 	if finalURL != "https://accounts.x.ai/oauth2/device/consent" {
 		t.Fatalf("finalURL = %q", finalURL)
+	}
+	if got := extractConsentToken(body); got != consentToken {
+		t.Fatalf("verify body consent_token = %q", got)
 	}
 	if len(client.requests) != 1 {
 		t.Fatalf("redirect must not be followed, requests = %d", len(client.requests))
