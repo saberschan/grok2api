@@ -101,6 +101,12 @@ func TestSSOBuildFlowUsesConsentPageTokenAndTrustedEndpoints(t *testing.T) {
 			t.Fatalf("request %d = %s %s, want %s %s", i, request.Method, request.URL, want[i].method, want[i].path)
 		}
 	}
+	if got := client.requests[3].Header.Get("Origin"); got != "https://accounts.x.ai" {
+		t.Fatalf("approve Origin = %q", got)
+	}
+	if got := client.requests[3].Header.Get("Referer"); got != "https://accounts.x.ai/oauth2/device/consent" {
+		t.Fatalf("approve Referer = %q", got)
+	}
 	approveBody, err := io.ReadAll(client.requests[3].Body)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +136,22 @@ func TestExtractConsentTokenSupportsHTMLAndRSC(t *testing.T) {
 	}
 	if got := extractConsentToken([]byte(`<input name="consent_token" value="not-a-jwt">`)); got != "" {
 		t.Fatalf("malformed consent token accepted: %q", got)
+	}
+}
+
+func TestSummarizeOAuthErrorUsesStructuredFieldsAndOmitsSensitiveText(t *testing.T) {
+	body := []byte(`{"error":"request_not_verified","error_description":" Request could not be verified\n"}`)
+	if got := summarizeOAuthError(body); got != "Request could not be verified" {
+		t.Fatalf("summarizeOAuthError() = %q", got)
+	}
+	if got := summarizeOAuthError([]byte(`{"message":"eyJheader.payload.signature"}`)); strings.Contains(got, "eyJ") {
+		t.Fatalf("token-like error detail was not omitted: %q", got)
+	}
+	if got := summarizeOAuthError([]byte(`<html>upstream error</html>`)); got != "" {
+		t.Fatalf("unstructured upstream body leaked: %q", got)
+	}
+	if got := summarizeOAuthError([]byte(`<html><p>Request could not be verified</p></html>`)); got != "Request could not be verified" {
+		t.Fatalf("HTML verification error summary = %q", got)
 	}
 }
 
@@ -188,5 +210,12 @@ func TestSSOBuildConversionSanitizesTokenAndURLs(t *testing.T) {
 		if safeXAIURL(value) {
 			t.Fatalf("unsafe URL accepted: %s", value)
 		}
+	}
+	origin, err := ssoOrigin("https://accounts.x.ai/oauth2/device/consent?state=abc")
+	if err != nil || origin != "https://accounts.x.ai" {
+		t.Fatalf("ssoOrigin() = %q, %v", origin, err)
+	}
+	if _, err := ssoOrigin("https://example.com/oauth2/device/consent"); err == nil {
+		t.Fatal("untrusted consent origin accepted")
 	}
 }

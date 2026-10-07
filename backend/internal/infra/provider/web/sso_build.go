@@ -124,6 +124,7 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 	}
 
 	consentToken := extractConsentToken(verifyBody)
+	consentReferer := finalURL
 	if consentToken == "" {
 		consentStatus, consentURL, consentBody, consentErr := f.do(ctx, http.MethodGet, finalURL, nil)
 		if consentErr != nil {
@@ -135,20 +136,32 @@ func (f *ssoBuildFlow) convert(ctx context.Context, credential accountdomain.Cre
 		if consentStatus < 200 || consentStatus >= 300 {
 			return provider.CredentialSeed{}, fmt.Errorf("读取 SSO Device Flow consent 页面失败: %w", conversionHTTPError{status: consentStatus})
 		}
+		consentReferer = consentURL
 		consentToken = extractConsentToken(consentBody)
 	}
 	if consentToken == "" {
 		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动批准 Device Flow 失败：未获取 consent_token")
 	}
+	origin, err := ssoOrigin(consentReferer)
+	if err != nil {
+		return provider.CredentialSeed{}, fmt.Errorf("SSO Device Flow consent URL 无效: %w", err)
+	}
+	approveHeaders := http.Header{}
+	approveHeaders.Set("Origin", origin)
+	approveHeaders.Set("Referer", consentReferer)
 
-	status, finalURL, _, err = f.doWithFollow(ctx, http.MethodPost, ssoApproveURL, url.Values{
+	var approveBody []byte
+	status, finalURL, approveBody, err = f.doWithFollowHeaders(ctx, http.MethodPost, ssoApproveURL, url.Values{
 		"user_code": {device.UserCode}, "action": {"allow"}, "principal_type": {"User"}, "principal_id": {""},
 		"consent_token": {consentToken},
-	}, false)
+	}, false, approveHeaders)
 	if err != nil {
 		return provider.CredentialSeed{}, err
 	}
 	if status < 200 || status >= 400 {
+		if reason := summarizeOAuthError(approveBody); reason != "" {
+			return provider.CredentialSeed{}, fmt.Errorf("SSO 自动批准 Device Flow 失败 (%s): %w", reason, conversionHTTPError{status: status})
+		}
 		return provider.CredentialSeed{}, fmt.Errorf("SSO 自动批准 Device Flow 失败: %w", conversionHTTPError{status: status})
 	}
 	if redirectState := ssoDeviceRedirectState(finalURL); redirectState != "done" {
@@ -246,6 +259,10 @@ func (f *ssoBuildFlow) do(ctx context.Context, method, endpoint string, form url
 // doWithFollow 在 follow=false 时遇到 3xx 直接返回状态码与解析后的 Location 作为 finalURL，
 // 用于重定向目标域会被 Cloudflare 拦截（accounts.x.ai）的请求。
 func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string, form url.Values, follow bool) (int, string, []byte, error) {
+	return f.doWithFollowHeaders(ctx, method, endpoint, form, follow, nil)
+}
+
+func (f *ssoBuildFlow) doWithFollowHeaders(ctx context.Context, method, endpoint string, form url.Values, follow bool, headers http.Header) (int, string, []byte, error) {
 	if !safeXAIURL(endpoint) {
 		return 0, "", nil, fmt.Errorf("xAI OAuth URL 不安全")
 	}
@@ -267,6 +284,11 @@ func (f *ssoBuildFlow) doWithFollow(ctx context.Context, method, endpoint string
 		request.Header.Set("Cookie", f.cookieHeader())
 		if currentForm != nil {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		for name, values := range headers {
+			for _, value := range values {
+				request.Header.Add(name, value)
+			}
 		}
 		response, err := f.client.Do(request)
 		if err != nil {
@@ -361,6 +383,14 @@ func safeXAIURL(raw string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	return host == "x.ai" || strings.HasSuffix(host, ".x.ai")
+}
+
+func ssoOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || !safeXAIURL(raw) {
+		return "", fmt.Errorf("xAI OAuth origin URL 不安全")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func normalizeSSOToken(value string) string {
@@ -474,6 +504,36 @@ func validConsentToken(value string) bool {
 		}
 	}
 	return true
+}
+
+func summarizeOAuthError(body []byte) string {
+	var payload struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+		Message          string `json:"message"`
+		Detail           string `json:"detail"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		if strings.Contains(strings.ToLower(string(body)), "request could not be verified") {
+			return "Request could not be verified"
+		}
+		return ""
+	}
+	reason := firstValue(payload.ErrorDescription, payload.Error, payload.Message, payload.Detail)
+	if strings.Contains(reason, "eyJ") {
+		return "upstream error detail omitted (token-like content)"
+	}
+	reason = strings.Map(func(value rune) rune {
+		if value < 0x20 || value == 0x7f {
+			return ' '
+		}
+		return value
+	}, reason)
+	reason = strings.TrimSpace(reason)
+	if runes := []rune(reason); len(runes) > 240 {
+		reason = string(runes[:240])
+	}
+	return reason
 }
 
 func decodeBuildClaims(token string) map[string]any {
