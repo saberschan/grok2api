@@ -66,7 +66,8 @@ func (a *Adapter) ConvertToBuild(ctx context.Context, credential accountdomain.C
 		client: lease, userAgent: lease.UserAgent,
 		cookies: ssoBuildCookies(token, lease.CFCookies),
 	}
-	seed, err := flow.convert(requestCtx, credential)
+	// 授权码换 token。Device approve 要浏览器现铸的 castle_request_token，纯 HTTP 过不了。
+	seed, err := flow.convertWithAuthCode(requestCtx, credential)
 	if err != nil {
 		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, conversionStatus(err), err)
 		return provider.CredentialSeed{}, err
